@@ -40,11 +40,11 @@ mysql --user=admin --password={password} --host={RDS endpoint}
 use wordpress
 
 update wp_options
-set option_value = 'http://{lload balancer DNS name}'
+set option_value = 'http://{load balancer DNS name}'
 where option_name = 'siteurl';
 
 update wp_options
-set option_value = 'http://{lload balancer DNS name}'
+set option_value = 'http://{load balancer DNS name}'
 where option_name = 'home';
 ```
 
