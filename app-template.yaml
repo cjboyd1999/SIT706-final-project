@@ -1,0 +1,152 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Application layer for SIT706 Task 6.1P (Final Project)
+
+Parameters:
+
+  LatestAmiId:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Default: '/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2'
+
+  NetworkParameter:
+    Type: String
+    Default: network-stack
+
+  DatabasePassword:
+    Type: String
+
+Resources:
+
+  # ---
+  # [ AMI Image - Systems Manager Automation ]
+  # ---
+  
+  CreateAmiDocument:
+    Type: AWS::SSM::Document
+    Properties:
+      DocumentType: Automation
+      Name: CreateImageFromInstance
+      Content:
+        schemaVersion: '0.3'
+        description: 'Create AMI from EC2 instance'
+        assumeRole: !Sub arn:aws:iam::${AWS::AccountId}:role/LabRole
+        parameters:
+          instanceId:
+            type: String
+            description: 'EC2 instance ID'
+          imageName:
+            type: String
+            description: 'AMI name'
+        mainSteps:
+          - name: createImage
+            action: aws:createImage
+            inputs:
+              InstanceId: "{{ instanceId }}"
+              ImageName: " {{ imageName }}"
+              NoReboot: false
+
+  # ---
+  # [ AMI Server EC2 Instance ]
+  # ---
+
+  AmiInstance:
+    Type: AWS::EC2::Instance
+    DependsOn:
+      - CreateAmiDocument
+    Properties:
+      ImageId:
+        Ref: LatestAmiId
+      InstanceType: t2.micro
+      KeyName:
+        Fn::Sub: '${NetworkParameter}-instance-key-pair'
+      IamInstanceProfile: LabInstanceProfile
+      NetworkInterfaces:
+        - DeviceIndex: '0'
+          AssociatePublicIpAddress: 'true'
+          SubnetId: 
+            Fn::ImportValue:
+              Fn::Sub: '${NetworkParameter}-public-subnet-1'
+          GroupSet:
+            - Fn::ImportValue:
+                Fn::Sub: '${NetworkParameter}-AMI-SG'
+      Tags:
+        - Key: Name
+          Value: 
+            Fn::Sub: '${AWS::StackName}-ami-server'
+      UserData:
+        Fn::Base64: |
+            #!/bin/bash
+            yum -y update
+            yum -y install php httpd mysql
+            amazon-linux-extras install php7.4 -y
+            yum -y install php-mbstring php-xml
+            wget http://wordpress.org/latest.tar.gz -P /tmp/
+            tar zxvf /tmp/latest.tar.gz -C /tmp
+            cp -r /tmp/wordpress/* /var/www/html/
+            chown apache:apache -R /var/www/html
+            systemctl enable httpd.service
+            systemctl start httpd.service
+
+  # ---
+  # [ RDS Instance ]
+  # ---
+  
+  RDSSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Subnet group for RDS
+      SubnetIds:
+        - Fn::ImportValue:
+            Fn::Sub: '${NetworkParameter}-private-subnet-1'
+        - Fn::ImportValue:
+            Fn::Sub: '${NetworkParameter}-private-subnet-2'
+      Tags:
+        - Key: Name
+          Value: 
+            Fn::Sub: '${AWS::StackName}-boyd-db-subnet-group'
+
+  RDSInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceIdentifier: 
+        Fn::Sub: '${AWS::StackName}-boyd-db'
+      DBName: wordpress
+      DBInstanceClass: db.t4g.micro
+      AllocatedStorage: 20
+      Engine: MySQL
+      EngineVersion: '8.0.35'
+      MasterUsername: admin
+      MasterUserPassword: !Ref DatabasePassword
+      MultiAZ: true
+      DBSubnetGroupName: !Ref RDSSubnetGroup
+      VPCSecurityGroups:
+        - Fn::ImportValue:
+            Fn::Sub: '${NetworkParameter}-DB-SG'
+      PubliclyAccessible: false
+
+  RDSInstanceReadReplica:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceIdentifier: 
+        Fn::Sub: '${AWS::StackName}-boyd-db-replica'
+      SourceDBInstanceIdentifier: !Ref RDSInstance
+      DBInstanceClass: db.t4g.micro
+      PubliclyAccessible: false
+
+  # ---
+  # [ S3 Bucket ]
+  # ---
+
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${AWS::StackName}-${AWS::Region}-bucket-${AWS::AccountId}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+
+Outputs:
+  AMIServerPublicIP:
+    Value: !GetAtt 'AmiInstance.PublicIp'
+    

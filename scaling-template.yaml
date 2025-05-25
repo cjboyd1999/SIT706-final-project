@@ -1,0 +1,69 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Application Scaling layer for SIT706 Task 6.1P (Final Project)
+
+Parameters:
+  NetworkParameter:
+    Type: String
+    Default: network-stack
+
+  AmiId:
+    Type: AWS::EC2::Image::Id
+    Description: ID of the Server AMI
+
+Resources:
+
+# ---
+  # [ Launch Template ]
+  # ---
+
+  AppLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: 
+        Fn::Sub: '${AWS::StackName}-app-template'
+      LaunchTemplateData:
+        IamInstanceProfile:
+          Name: LabInstanceProfile
+        ImageId: !Ref AmiId
+        InstanceType: t2.micro
+        KeyName: 
+          Fn::Sub: '${NetworkParameter}-instance-key-pair'
+        SecurityGroupIds:
+          - Fn::ImportValue:
+              Fn::Sub: '${NetworkParameter}-WEBAPP-SG'
+
+  # ---
+  # [ Auto Scaling Group ]
+  # ---
+
+  AppAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      LaunchTemplate:
+        LaunchTemplateId: !Ref AppLaunchTemplate
+        Version: !GetAtt AppLaunchTemplate.LatestVersionNumber
+      MinSize: 1
+      MaxSize: 3
+      VPCZoneIdentifier:
+        - Fn::ImportValue:
+            Fn::Sub: '${NetworkParameter}-private-subnet-1'
+        - Fn::ImportValue:
+            Fn::Sub: '${NetworkParameter}-private-subnet-2'
+      TargetGroupARNs:
+        - Fn::ImportValue:
+            Fn::Sub: '${NetworkParameter}-app-target-group'
+      Tags:
+        - Key: Name
+          Value: 
+            Fn::Sub: '${AWS::StackName}-app-asg'
+          PropagateAtLaunch: false
+
+  AppCPUPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AutoScalingGroupName: !Ref AppAutoScalingGroup
+      PolicyType: TargetTrackingScaling
+      TargetTrackingConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ASGAverageCPUUtilization
+        TargetValue: 70.0
